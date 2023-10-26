@@ -1,8 +1,8 @@
 # Note for plugin developers
 
-This folder contains the generated version of the javascript file.
+This folder contains minified version of the javascript file for each platform.
 
-They are assembled and minified from files located in `src/ts`.
+They are assembled and minified from files located in `src/js`.
 
 Compilation is done using the following command:
 

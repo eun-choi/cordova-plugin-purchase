@@ -14,6 +14,7 @@
 static BOOL g_initialized = NO;
 static BOOL g_debugEnabled = NO;
 static BOOL g_autoFinishEnabled = NO;
+static BOOL g_downloadHostedContent = YES;
 
 /*
  * Helpers
@@ -25,9 +26,9 @@ static BOOL g_autoFinishEnabled = NO;
 // Log messages to NSLog if g_debugEnabled is set
 #define DLog(fmt, ...) { \
     if (g_debugEnabled) \
-        NSLog((@"[CdvPurchase.AppleAppStore.objc] " fmt), ##__VA_ARGS__); \
+        NSLog((@"InAppPurchase[objc]: " fmt), ##__VA_ARGS__); \
     else if (!g_initialized) \
-        NSLog((@"[CdvPurchase.AppleAppStore.objc] (before init): " fmt), ##__VA_ARGS__); \
+        NSLog((@"InAppPurchase[objc] (before init): " fmt), ##__VA_ARGS__); \
 }
 
 #define ERROR_CODES_BASE 6777000
@@ -187,10 +188,6 @@ static NSString *priceLocaleCurrencyCode(NSLocale *priceLocale) {
     return [numberFormatter currencyCode];
 }
 
-static NSString *toTimestamp(NSDate *date) {
-    return [NSString stringWithFormat:@"%f", [date timeIntervalSince1970] * 1000];
-}
-
 @implementation NSArray (JSONSerialize)
 - (NSString *)JSONSerialize {
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:self options:0 error:nil];
@@ -243,6 +240,7 @@ static NSString *toTimestamp(NSDate *date) {
 
 @synthesize products;
 @synthesize retainer;
+@synthesize currentDownloads;
 @synthesize unfinishedTransactions;
 @synthesize pendingTransactionUpdates;
 
@@ -250,14 +248,15 @@ static NSString *toTimestamp(NSDate *date) {
 -(void) pluginInitialize {
     self.retainer = [[NSMutableDictionary alloc] init];
     self.products = [[NSMutableDictionary alloc] init];
+    self.currentDownloads = [[NSMutableDictionary alloc] init];
     self.pendingTransactionUpdates = [[NSMutableArray alloc] init];
     self.unfinishedTransactions = [[NSMutableDictionary alloc] init];
     if ([SKPaymentQueue canMakePayments]) {
         [[SKPaymentQueue defaultQueue] addTransactionObserver:self];
-        NSLog(@"[CdvPurchase.AppleAppStore.objc] Initialized.");
+        NSLog(@"InAppPurchase[objc] Initialized.");
     }
     else {
-        NSLog(@"[CdvPurchase.AppleAppStore.objc] Initialization failed: payments are disabled.");
+        NSLog(@"InAppPurchase[objc] Initialization failed: payments are disabled.");
     }
 }
 
@@ -274,9 +273,12 @@ static NSString *toTimestamp(NSDate *date) {
     g_autoFinishEnabled = YES;
 }
 
+-(void) disableHostedContent: (CDVInvokedUrlCommand*)command {
+    g_downloadHostedContent = NO;
+}
+
 -(void) setup: (CDVInvokedUrlCommand*)command {
     CDVPluginResult* pluginResult = nil;
-    g_initialized = YES;
 
     if (![SKPaymentQueue canMakePayments]) {
         DLog(@"setup: Cant make payments, plugin disabled.");
@@ -289,12 +291,6 @@ static NSString *toTimestamp(NSDate *date) {
     }
 
     pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"InAppPurchase initialized"];
-    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-}
-
--(void) processPendingTransactions: (CDVInvokedUrlCommand*)command {
-    [self processPendingTransactionUpdates];
-    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"processPendingTransactions"];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
@@ -382,28 +378,17 @@ static NSString *toTimestamp(NSDate *date) {
     DLog(@"load: Product request started");
 }
 
-- (NSString *) stringArgument: (id)value {
-    if (value != nil && value != NSNull.null && [value isKindOfClass:[NSString class]]) {
-        return value;
-    }
-    else {
-        return nil;
-    }
-}
-
 - (void) purchase: (CDVInvokedUrlCommand*)command {
 
     DLog(@"purchase: About to do IAP");
     id identifier = [command.arguments objectAtIndex:0];
     id quantity =   [command.arguments objectAtIndex:1];
-    NSString *applicationUsername = [self stringArgument: [command.arguments objectAtIndex:2]];
+    NSString *applicationUsername = (NSString*)[command.arguments objectAtIndex:2];
     id discountArg = [command.arguments objectAtIndex:3];
 
     SKProduct *product = [self.products objectForKey:identifier];
     if (product == nil) {
         DLog(@"Product (%@) does not exist or is not sucessfully initialized.", identifier);
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Product does not exist."];
-        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
     SKMutablePayment *payment = [SKMutablePayment paymentWithProduct:product];
@@ -430,8 +415,6 @@ static NSString *toTimestamp(NSDate *date) {
         }
     }
     [[SKPaymentQueue defaultQueue] addPayment:payment];
-    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Payment added to queue"];
-    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
 //Check if user/device is allowed to make in-app purchases
@@ -455,17 +438,50 @@ static NSString *toTimestamp(NSDate *date) {
     [[SKPaymentQueue defaultQueue] restoreCompletedTransactions];
 }
 
+// TODO: rename to pauseDownloads
+- (void) pause: (CDVInvokedUrlCommand*)command {
+
+    NSArray *dls = [self.currentDownloads allValues];
+    DLog(@"pause: Pausing %lu active downloads...",[dls count]);
+
+    [[SKPaymentQueue defaultQueue] pauseDownloads:dls];
+    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
+// TODO: rename to resumeDownloads
+- (void) resume: (CDVInvokedUrlCommand*)command {
+
+    NSArray *dls = [self.currentDownloads allValues];
+    DLog(@"resume: Resuming %lu active downloads...",[dls count]);
+    [[SKPaymentQueue defaultQueue] resumeDownloads:[self.currentDownloads allValues]];
+    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
+// TODO: rename to cancelDownloads
+- (void) cancel: (CDVInvokedUrlCommand*)command {
+
+    NSArray *dls = [self.currentDownloads allValues];
+    DLog(@"cancel: Cancelling %lu active downloads...",[dls count]);
+    [[SKPaymentQueue defaultQueue] cancelDownloads:[self.currentDownloads allValues]];
+    if (command != nil) {
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    }
+}
+
 // SKPaymentTransactionObserver methods
 // called when the transaction status is updated
 //
 - (void) paymentQueue:(SKPaymentQueue*)queue updatedTransactions:(NSArray*)transactions {
 
-    NSString *state, *error, *transactionIdentifier, *originalTransactionIdentifier, *transactionReceipt, *productId, *transactionDate, *discountId;
+    NSString *state, *error, *transactionIdentifier, *originalTransactionIdentifier, *transactionReceipt, *productId;
     NSInteger errorCode;
 
     for (SKPaymentTransaction *transaction in transactions) {
 
-        error = state = transactionIdentifier = originalTransactionIdentifier = transactionReceipt = productId = transactionDate = discountId = @"";
+        error = state = transactionIdentifier = originalTransactionIdentifier = transactionReceipt = productId = @"";
         errorCode = 0;
         DLog(@"paymentQueue:updatedTransactions: %@", transaction.payment.productIdentifier);
 
@@ -480,18 +496,10 @@ static NSString *toTimestamp(NSDate *date) {
             case SKPaymentTransactionStatePurchased:
                 state = @"PaymentTransactionStatePurchased";
                 transactionIdentifier = transaction.transactionIdentifier;
-                // Transaction receipts are deprecated since iOS 7.0, time to remove it
-                // #if TARGET_OS_IPHONE
-                // transactionReceipt = [[transaction transactionReceipt] base64EncodedStringWithOptions:0];
-                // #endif
+#if TARGET_OS_IPHONE
+                transactionReceipt = [[transaction transactionReceipt] base64EncodedStringWithOptions:0];
+#endif
                 productId = transaction.payment.productIdentifier;
-                transactionDate = toTimestamp(transaction.transactionDate);
-
-                if (@available(iOS 12.2, *)) {
-                    if (transaction.payment.paymentDiscount != nil) {
-                        discountId = transaction.payment.paymentDiscount.identifier;
-                    }
-                }
                 if(transaction.originalTransaction != nil){
                     originalTransactionIdentifier = transaction.originalTransaction.transactionIdentifier;
                 }
@@ -513,7 +521,7 @@ static NSString *toTimestamp(NSDate *date) {
                 // Finish failed transactions, when autoFinish is off
                 if (!g_autoFinishEnabled) {
                     [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
-                    // [self transactionFinished:transaction];
+                    [self transactionFinished:transaction];
                 }
                 break;
 
@@ -522,11 +530,9 @@ static NSString *toTimestamp(NSDate *date) {
                 transactionIdentifier = transaction.transactionIdentifier;
                 if (!transactionIdentifier)
                     transactionIdentifier = transaction.originalTransaction.transactionIdentifier;
-                // Transaction receipts are deprecated since iOS 7.0, time to remove it
-                // #if TARGET_OS_IPHONE
-                // transactionReceipt = [[transaction transactionReceipt] base64EncodedStringWithOptions:0];
-                // #endif
-
+#if TARGET_OS_IPHONE
+                transactionReceipt = [[transaction transactionReceipt] base64EncodedStringWithOptions:0];
+#endif
                 // TH 08/03/2016: default to transaction.payment.productIdentifier and use transaction.originalTransaction.payment.productIdentifier as a fallback.
                 // Previously only used transaction.originalTransaction.payment.productIdentifier.
                 // When restoring transactions when there are unfinished transactions, I encountered transactions for which originalTransaction is nil, leading to a nil productId.
@@ -547,9 +553,6 @@ static NSString *toTimestamp(NSDate *date) {
 #define PT_INDEX_TRANSACTION_IDENTIFIER 3
 #define PT_INDEX_PRODUCT_IDENTIFIER 4
 #define PT_INDEX_TRANSACTION_RECEIPT 5
-#define PT_INDEX_ORIGINAL_TRANSACTION_IDENTIFIER 6
-#define PT_INDEX_TRANSACTION_DATE 7
-#define PT_INDEX_DISCOUNT_ID 8
         NSArray *callbackArgs = [NSArray arrayWithObjects:
             NILABLE(state),
             [NSNumber numberWithInteger:errorCode],
@@ -558,8 +561,6 @@ static NSString *toTimestamp(NSDate *date) {
             NILABLE(productId),
             NILABLE(transactionReceipt),
             NILABLE(originalTransactionIdentifier),
-            NILABLE(transactionDate),
-            NILABLE(discountId),
             nil];
 
         if (g_initialized) {
@@ -578,24 +579,30 @@ static NSString *toTimestamp(NSDate *date) {
         [self processTransactionUpdate:ta[0] withArgs:ta[1]];
     }
     [pendingTransactionUpdates removeAllObjects];
-
-    [self.commandDelegate evalJs:@"window.storekit.lastTransactionUpdated()"];
 }
 
 - (void) processTransactionUpdate:(SKPaymentTransaction*)transaction withArgs:(NSArray*)callbackArgs {
 
     DLog(@"processTransactionUpdate:withArgs: transactionIdentifier=%@", callbackArgs[PT_INDEX_TRANSACTION_IDENTIFIER]);
     NSString *js = [NSString
-        stringWithFormat:@"window.storekit.transactionUpdated.apply(window.storekit, %@)",
+        stringWithFormat:@"window.storekit.updatedTransactionCallback.apply(window.storekit, %@)",
         [callbackArgs JSONSerialize]];
     [self.commandDelegate evalJs:js];
 
+    NSArray *downloads = nil;
     SKPaymentTransactionState state = transaction.transactionState;
+    if (state == SKPaymentTransactionStateRestored || state == SKPaymentTransactionStatePurchased) {
+        downloads = transaction.downloads;
+    }
+
     BOOL canFinish = state == SKPaymentTransactionStateRestored
         || state == SKPaymentTransactionStateFailed
         || state == SKPaymentTransactionStatePurchased;
 
-    if (g_autoFinishEnabled && canFinish) {
+    if (downloads && [downloads count] > 0 && g_downloadHostedContent) {
+        [[SKPaymentQueue defaultQueue] startDownloads:downloads];
+    }
+    else if (g_autoFinishEnabled && canFinish) {
         [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
         [self transactionFinished:transaction];
     }
@@ -616,7 +623,7 @@ static NSString *toTimestamp(NSDate *date) {
         NILABLE(nil),
         nil];
     NSString *js = [NSString
-        stringWithFormat:@"window.storekit.transactionUpdated.apply(window.storekit, %@)",
+        stringWithFormat:@"window.storekit.updatedTransactionCallback.apply(window.storekit, %@)",
         [callbackArgs JSONSerialize]];
     [self.commandDelegate evalJs:js];
 }
@@ -624,7 +631,7 @@ static NSString *toTimestamp(NSDate *date) {
 - (void) finishTransaction: (CDVInvokedUrlCommand*)command {
 
     NSString *identifier = (NSString*)[command.arguments objectAtIndex:0];
-    // DLog(@"finishTransaction: %@", identifier);
+    DLog(@"finishTransaction: %@", identifier);
     SKPaymentTransaction *transaction = nil;
 
     if (identifier) {
@@ -640,8 +647,8 @@ static NSString *toTimestamp(NSDate *date) {
         [self transactionFinished:transaction];
     }
     else {
-        // DLog(@"finishTransaction: Cannot finish transaction %@.", identifier);
-        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Cannot finish transaction [#CdvPurchase:100]"];
+        DLog(@"finishTransaction: Cannot finish transaction %@.", identifier);
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Cannot finish transaction"];
     }
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
@@ -734,12 +741,197 @@ static NSString *toTimestamp(NSDate *date) {
     g_initialized = NO;
     g_debugEnabled = NO;
     g_autoFinishEnabled = NO;
+    [self cancel:nil];
     self.products = nil;
+    self.currentDownloads = nil;
     self.unfinishedTransactions = nil;
     self.pendingTransactionUpdates = nil;
     [[SKPaymentQueue defaultQueue] removeTransactionObserver:self];
     self.retainer = nil;
     [super dispose];
+}
+
+/****************************************************************************************************************
+ * Downloads
+ ****************************************************************************************************************/
+// Download Queue
+- (void) paymentQueue:(SKPaymentQueue *)queue updatedDownloads:(NSArray *)downloads {
+    DLog(@"paymentQueue:updatedDownloads:");
+
+    for (SKDownload *download in downloads) {
+        NSString *state = @"";
+        NSString *error = @"";
+        NSInteger errorCode = 0;
+        NSString *progress_s = 0;
+        NSString *timeRemaining_s = 0;
+
+        SKPaymentTransaction *transaction = download.transaction;
+        NSString *transactionId = transaction.transactionIdentifier;
+#if TARGET_OS_IPHONE
+        NSString *transactionReceipt = [[transaction transactionReceipt] base64EncodedStringWithOptions:0];
+#else
+        NSString *transactionReceipt = NULL;
+#endif
+        SKPayment *payment = transaction.payment;
+        NSString *productId = payment.productIdentifier;
+
+        NSArray *callbackArgs;
+        NSString *js;
+
+#if TARGET_OS_IPHONE
+        SKDownloadState downloadState = download.downloadState;
+#else
+        SKDownloadState downloadState = download.state;
+#endif
+        switch (downloadState) {
+
+            case SKDownloadStateActive: {
+                // Add to current downloads
+                [self.currentDownloads setObject:download forKey:productId];
+
+                state = @"DownloadStateActive";
+
+                DLog(@"paymentQueue:updatedDownloads: Progress: %f", download.progress);
+                DLog(@"paymentQueue:updatedDownloads: Time remaining: %f", download.timeRemaining);
+
+                progress_s = [NSString stringWithFormat:@"%d", (int) (download.progress*100)];
+                timeRemaining_s = [NSString stringWithFormat:@"%d", (int) download.timeRemaining];
+
+                break;
+            }
+
+            case SKDownloadStateCancelled: {
+                // Remove from current downloads
+                [self.currentDownloads removeObjectForKey:productId];
+
+                state = @"DownloadStateCancelled";
+                [[SKPaymentQueue defaultQueue] finishTransaction:download.transaction];
+                [self transactionFinished:download.transaction];
+
+                break;
+            }
+
+            case SKDownloadStateFailed: {
+                // Remove from current downloads
+                [self.currentDownloads removeObjectForKey:productId];
+
+                state = @"DownloadStateFailed";
+                error = transaction.error.localizedDescription;
+                errorCode = transaction.error.code;
+                DLog(@"paymentQueue:updatedDownloads: Download error %lu %@", errorCode, error);
+                [[SKPaymentQueue defaultQueue] finishTransaction:download.transaction];
+                [self transactionFinished:download.transaction];
+
+                break;
+            }
+
+            case SKDownloadStateFinished: {
+                // Remove from current downloads
+                [self.currentDownloads removeObjectForKey:productId];
+
+                state = @"DownloadStateFinished";
+                [[SKPaymentQueue defaultQueue] finishTransaction:download.transaction];
+                [self transactionFinished:download.transaction];
+
+                [self copyDownloadToDocuments:download]; // Copy download content to Documnents folder
+
+                break;
+            }
+
+            case SKDownloadStatePaused: {
+                // Add to current downloads
+                [self.currentDownloads setObject:download forKey:productId];
+
+                state = @"DownloadStatePaused";
+
+                break;
+            }
+
+            case SKDownloadStateWaiting: {
+                // Add to current downloads
+                [self.currentDownloads setObject:download forKey:productId];
+                state = @"DownloadStateWaiting";
+
+                break;
+            }
+
+            default: {
+                DLog(@"paymentQueue:updatedDownloads: Invalid Download State");
+                return;
+            }
+        }
+
+        DLog(@"paymentQueue:updatedDownloads: Number of currentDownloads: %lu",[self.currentDownloads count]);
+        DLog(@"paymentQueue:updatedDownloads: Product %@ in download state: %@", productId, state);
+
+
+        callbackArgs = [NSArray arrayWithObjects:
+            NILABLE(state),
+            [NSNumber numberWithInt:(int)errorCode],
+            NILABLE(error),
+            NILABLE(transactionId),
+            NILABLE(productId),
+            NILABLE(transactionReceipt),
+            NILABLE(progress_s),
+            NILABLE(timeRemaining_s),
+            nil];
+        js = [NSString
+            stringWithFormat:@"window.storekit.updatedDownloadCallback.apply(window.storekit, %@)",
+            [callbackArgs JSONSerialize]];
+        [self.commandDelegate evalJs:js];
+
+    }
+}
+
+/*
+ * Download handlers
+ */
+
+- (void)copyDownloadToDocuments:(SKDownload *)download {
+
+    DLog(@"copyDownloadToDocuments: Copying downloaded content to Documents...");
+
+    NSString *source = [download.contentURL relativePath];
+    NSDictionary *dict = [[NSMutableDictionary alloc] initWithContentsOfFile:[source stringByAppendingPathComponent:@"ContentInfo.plist"]];
+    NSString *targetFolder = [FileUtility getDocumentPath];
+    NSString *content = [source stringByAppendingPathComponent:@"Contents"];
+    NSArray *files;
+
+    // Use folder if specified in .plist
+    if ([dict objectForKey:@"Folder"]) {
+        targetFolder = [targetFolder stringByAppendingPathComponent:[dict objectForKey:@"Folder"]];
+        if(![FileUtility isFolderExist:targetFolder]){
+            DLog(@"copyDownloadToDocuments: Creating Documents subfolder: %@", targetFolder);
+            NSAssert([FileUtility createFolder:targetFolder], @"Failed to create Documents subfolder: %@", targetFolder);
+        }
+    }
+
+    if ([dict objectForKey:@"Files"]) {
+        DLog(@"copyDownloadToDocuments: Found Files key in .plist");
+        files =  [dict objectForKey:@"Files"];
+    }
+    else {
+        DLog(@"copyDownloadToDocuments: No Files key found in .plist - copy all files in Content folder");
+        files = [FileUtility listFiles:content extension:nil];
+    }
+
+    for (NSString *file in files) {
+        NSString *fcontent = [content stringByAppendingPathComponent:file];
+        NSString *targetFile = [targetFolder stringByAppendingPathComponent:[file lastPathComponent]];
+
+        DLog(@"copyDownloadToDocuments: Content path: %@", fcontent);
+
+        NSAssert([FileUtility isFileExist:fcontent], @"Content path MUST be valid");
+
+        // Copy the content to the documents folder
+        NSAssert([FileUtility copyFile:fcontent dst:targetFile], @"Failed to copy the content");
+        DLog(@"copyDownloadToDocuments: Copied %@ to %@", fcontent, targetFile);
+
+        // Set flag so we don't backup on iCloud
+        NSURL* url = [NSURL fileURLWithPath:targetFile];
+        [url setResourceValue: [NSNumber numberWithBool: YES] forKey: NSURLIsExcludedFromBackupKey error: Nil];
+    }
+
 }
 
 //
@@ -823,30 +1015,12 @@ static NSString *toTimestamp(NSDate *date) {
 #endif
 }
 
-- (NSString *)errorCodeStack:(NSError *)error {
-    NSString *message = [NSString stringWithFormat:@"%@ [#%@:%ld]", [error localizedDescription], error.domain, (long)error.code];
-    if (@available(iOS 14.5, *)) {
-        for (NSError *underlyingError in error.underlyingErrors) {
-            message = [NSString stringWithFormat:@"%@, (%@)", message, [self errorCodeStack:underlyingError]];
-        }
-    }
-    return message;
-}
-
-- (void)request:(SKRequest *)request didFailWithError:(NSError *)error {
+- (void):(SKRequest *)request didFailWithError:(NSError*) error {
     DLog(@"RefreshReceiptDelegate.request didFailWithError: In-App Store unavailable (ERROR %li)", (unsigned long)error.code);
-    NSString *message = [self errorCodeStack:error];
-    DLog(@"RefreshReceiptDelegate.request didFailWithError: %@", message);
+    DLog(@"RefreshReceiptDelegate.request didFailWithError: %@", [error localizedDescription]);
     CDVPluginResult* pluginResult =
-    [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:message];
+    [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]];
     [self.plugin.commandDelegate sendPluginResult:pluginResult callbackId:self.command.callbackId];
-#if ARC_ENABLED
-    [self.plugin.retainer removeObjectForKey:@"receiptRefreshRequest"];
-    [self.plugin.retainer removeObjectForKey:@"receiptRefreshRequestDelegate"];
-#else
-    [request release];
-    [self    release];
-#endif
 }
 
 #if ARC_DISABLED
@@ -883,7 +1057,7 @@ static NSString *toTimestamp(NSDate *date) {
         NSNumber *introPriceNumberOfPeriods = nil;
         NSString *introPriceSubscriptionPeriod  = nil;
 
-        // Introductory price are supported since iOS 11.2 and macOS 10.13.2
+        // Introductory price are supported from those iOS and macOS versions
         if (@available(iOS 11.2, macOS 10.13.2, *)) {
             SKProductDiscount *introPrice = product.introductoryPrice;
             if (introPrice != nil) {
@@ -896,7 +1070,7 @@ static NSString *toTimestamp(NSDate *date) {
         }
 
         NSMutableArray *discounts = [NSMutableArray array];
-        // Subscription discounts are supported since iOS 12.2 and macOS 10.14.4
+        // Subscription discounts are supported on recent iOS and macOS
         if (@available(iOS 12.2, macOS 10.14.4, *)) {
             for (SKProductDiscount *discount in product.discounts) {
                 NSNumber *numberOfPeriods = [NSNumber numberWithUnsignedLong:
@@ -959,6 +1133,10 @@ static NSString *toTimestamp(NSDate *date) {
         [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:callbackArgs];
     DLog(@"BatchProductsRequestDelegate.productsRequest:didReceiveResponse: sendPluginResult: %@", callbackArgs);
     [self.plugin.commandDelegate sendPluginResult:pluginResult callbackId:self.command.callbackId];
+
+    // Now that we have loaded product informations, we can safely process pending transactions.
+    g_initialized = YES;
+    [self.plugin processPendingTransactionUpdates];
 
 #if ARC_ENABLED
     // For some reason, the system needs to send more messages to the productsRequestDelegate after this.
