@@ -259,7 +259,13 @@ namespace CdvPurchase {
      */
     export type PlatformFunctionality = 'requestPayment' | 'order' | 'manageSubscriptions' | 'manageBilling';
 
-    /** Possible states of a product */
+    /**
+     * Possible states of a transaction.
+     *
+     * ```
+     * INITIATED → PENDING (optional) → APPROVED → FINISHED
+     * ```
+     */
     export enum TransactionState {
         // REQUESTED = 'requested',
         INITIATED = 'initiated',
@@ -293,10 +299,13 @@ namespace CdvPurchase {
         // /** Register a function called when a product is owned. */
         // owned(cb: Callback<Product>): When;
 
-        /** Register a function called when transaction is approved. */
+        /** Register a function called when a transaction is initiated. */
+        initiated(cb: Callback<Transaction>, callbackName?: string): When;
+
+        /** Register a function called when a transaction is approved. */
         approved(cb: Callback<Transaction>, callbackName?: string): When;
 
-        /** Register a function called when transaction is pending. */
+        /** Register a function called when a transaction is pending. */
         pending(cb: Callback<Transaction>, callbackName?: string): When;
 
         /** Register a function called when a transaction is finished. */

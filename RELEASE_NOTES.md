@@ -1,6 +1,44 @@
 # Release Notes - Cordova Plugin Purchase
 
-## 13.10.0
+## 13.10
+
+### 13.10.4
+
+#### Fix build issue on android
+
+Java compiler started complaining about an implicit parameter. This patch fixes it.
+
+Ref issue #1564
+
+### 13.10.3
+
+#### Fix issue when a callback is null or undefined
+
+Ref issue #1557
+
+### 13.10.2
+
+#### Add `validationDate` to verified receipts
+
+`validationDate` can be set server side (the validation request response), to provide a more reliable clock time than the device's when needed.
+
+### 13.10.1
+
+#### Fix store.initialize() when passed a single value
+
+`store.initialize()` was supposed to work when passed a single value instead of an array. It turns out there was a regression, fixed with this release.
+
+#### Add store.when().initiated(transaction)
+
+Allows monitoring `INITIATED` (new) transactions.
+
+```ts
+store.when().initiated(transaction => {
+  // a new transaction has been initiated.
+});
+```
+
+### 13.10.0
 
 #### (googleplay) Add "isConsumed" to consumed transactions
 
@@ -14,7 +52,7 @@ When callbacks are triggered, the reason is logged to the console.
 
 #### Prevent instanciating CdvPurchase.store twice
 
-So when ionic packages the plugin with the app code, no double instanciations of the plugin is performed.
+So when ionic packages the plugin with the app code, no double instantiations of the plugin is performed.
 
 ## 13.9.0
 
