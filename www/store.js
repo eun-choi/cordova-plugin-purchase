@@ -1348,7 +1348,7 @@ var CdvPurchase;
     /**
      * Current release number of the plugin.
      */
-    CdvPurchase.PLUGIN_VERSION = '13.10.4';
+    CdvPurchase.PLUGIN_VERSION = '13.11.1';
     /**
      * Entry class of the plugin.
      */
@@ -1906,7 +1906,7 @@ var CdvPurchase;
          * - on Android: `GOOGLE_PLAY`
          */
         defaultPlatform() {
-            switch (window.cordova.platformId) {
+            switch (CdvPurchase.Utils.platformId()) {
                 case 'android': return CdvPurchase.Platform.GOOGLE_PLAY;
                 case 'ios': return CdvPurchase.Platform.APPLE_APPSTORE;
                 default: return CdvPurchase.Platform.TEST;
@@ -2699,7 +2699,7 @@ var CdvPurchase;
             }
             /** Returns true on iOS, the only platform supported by this adapter */
             get isSupported() {
-                return window.cordova.platformId === 'ios';
+                return CdvPurchase.Utils.platformId() === 'ios';
             }
             upsertTransactionInProgress(productId, state) {
                 const transactionId = virtualTransactionId(productId);
@@ -4300,7 +4300,7 @@ var CdvPurchase;
                 }
                 /** Returns true on Android, the only platform supported by this Braintree bridge */
                 static isSupported() {
-                    return window.cordova.platformId === 'android';
+                    return CdvPurchase.Utils.platformId() === 'android';
                 }
                 isApplePaySupported() {
                     return __awaiter(this, void 0, void 0, function* () {
@@ -4466,7 +4466,7 @@ var CdvPurchase;
                 static isSupported(log) {
                     return new Promise(resolve => {
                         var _a;
-                        if (window.cordova.platformId !== 'ios') {
+                        if (CdvPurchase.Utils.platformId() !== 'ios') {
                             log.info('BraintreeApplePayPlugin is only available for ios.');
                             return resolve(false);
                         }
@@ -4589,7 +4589,7 @@ var CdvPurchase;
                     return window.CdvPurchaseBraintree;
                 }
                 static isSupported() {
-                    return window.cordova.platformId === 'ios';
+                    return CdvPurchase.Utils.platformId() === 'ios';
                 }
             }
             IosBridge.Bridge = Bridge;
@@ -4834,7 +4834,7 @@ var CdvPurchase;
             get receipts() { return this._receipts; }
             /** Returns true on Android, the only platform supported by this adapter */
             get isSupported() {
-                return window.cordova.platformId === 'android';
+                return CdvPurchase.Utils.platformId() === 'android';
             }
             initialize() {
                 return __awaiter(this, void 0, void 0, function* () {
@@ -5202,9 +5202,13 @@ var CdvPurchase;
 (function (CdvPurchase) {
     let GooglePlay;
     (function (GooglePlay) {
-        /** Replace SKU ProrationMode.
+        /**
+         * Replace SKU ProrationMode.
          *
-         * See https://developer.android.com/reference/com/android/billingclient/api/BillingFlowParams.ProrationMode */
+         * See https://developer.android.com/reference/com/android/billingclient/api/BillingFlowParams.ProrationMode
+         *
+         * @deprecated Use {@link ReplacementMode}
+         */
         let ProrationMode;
         (function (ProrationMode) {
             /** Replacement takes effect immediately, and the remaining time will be prorated and credited to the user. */
@@ -5218,6 +5222,24 @@ var CdvPurchase;
             /** Replacement takes effect immediately, and the user is charged full price of new plan and is given a full billing cycle of subscription, plus remaining prorated time from the old plan. */
             ProrationMode["IMMEDIATE_AND_CHARGE_FULL_PRICE"] = "IMMEDIATE_AND_CHARGE_FULL_PRICE";
         })(ProrationMode = GooglePlay.ProrationMode || (GooglePlay.ProrationMode = {}));
+        /**
+         * Supported replacement modes to replace an existing subscription with a new one.
+         *
+         * @see {@link https://developer.android.com/google/play/billing/subscriptions#replacement-modes}
+         */
+        let ReplacementMode;
+        (function (ReplacementMode) {
+            /** Replacement takes effect immediately, and the remaining time will be prorated and credited to the user. */
+            ReplacementMode["WITH_TIME_PRORATION"] = "IMMEDIATE_WITH_TIME_PRORATION";
+            /** Replacement takes effect immediately, and the billing cycle remains the same. */
+            ReplacementMode["CHARGE_PRORATED_PRICE"] = "IMMEDIATE_AND_CHARGE_PRORATED_PRICE";
+            /** Replacement takes effect immediately, and the new price will be charged on next recurrence time. */
+            ReplacementMode["WITHOUT_PRORATION"] = "IMMEDIATE_WITHOUT_PRORATION";
+            /** Replacement takes effect when the old plan expires, and the new price will be charged at the same time. */
+            ReplacementMode["DEFERRED"] = "DEFERRED";
+            /** Replacement takes effect immediately, and the user is charged full price of new plan and is given a full billing cycle of subscription, plus remaining prorated time from the old plan. */
+            ReplacementMode["CHARGE_FULL_PRICE"] = "IMMEDIATE_AND_CHARGE_FULL_PRICE";
+        })(ReplacementMode = GooglePlay.ReplacementMode || (GooglePlay.ReplacementMode = {}));
         let Bridge;
         (function (Bridge_2) {
             let log = function log(msg) {
@@ -6721,6 +6743,22 @@ var CdvPurchase;
             return hexStringFromArray(computeMD5(str, shiftFunction));
         }
         Utils.md5 = md5;
+    })(Utils = CdvPurchase.Utils || (CdvPurchase.Utils = {}));
+})(CdvPurchase || (CdvPurchase = {}));
+var CdvPurchase;
+(function (CdvPurchase) {
+    let Utils;
+    (function (Utils) {
+        /** Returns an UUID v4. Uses `window.crypto` internally to generate random values. */
+        function platformId() {
+            var _a, _b, _c;
+            if ((_a = window.cordova) === null || _a === void 0 ? void 0 : _a.platformId)
+                return (_b = window.cordova) === null || _b === void 0 ? void 0 : _b.platformId;
+            if ((_c = window.Capacitor) === null || _c === void 0 ? void 0 : _c.getPlatform)
+                return window.Capacitor.getPlatform();
+            return 'web';
+        }
+        Utils.platformId = platformId;
     })(Utils = CdvPurchase.Utils || (CdvPurchase.Utils = {}));
 })(CdvPurchase || (CdvPurchase = {}));
 var CdvPurchase;
